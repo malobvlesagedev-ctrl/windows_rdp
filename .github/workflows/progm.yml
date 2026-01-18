@@ -1,0 +1,62 @@
+name: Windows System Diagnostics
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnostics:
+    name: Collect System Diagnostics
+    runs-on: windows-latest
+    steps:
+      - name: Afficher date/heure et info base
+        shell: pwsh
+        run: |
+          Get-Date
+          Write-Output "OS:"
+          systeminfo | Select-String "OS Name","OS Version","System Type"
+
+      - name: Capturer top processes CPU/MEM
+        shell: pwsh
+        run: |
+          Get-Process | Sort-Object CPU -Descending | Select-Object -First 50 |
+            Select-Object Id,ProcessName,@{Name='CPU(s)';Expression={$_.CPU}},@{Name='WS(MB)';Expression={[math]::Round($_.WorkingSet/1MB,2)}} |
+            ConvertTo-Csv -NoTypeInformation | Out-File processes_top_cpu.csv -Encoding utf8
+
+      - name: Capturer utilisation mémoire et compteurs perf
+        shell: pwsh
+        run: |
+          Get-Counter '\Memory\Available MBytes','\Processor(_Total)\% Processor Time' -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty CounterSamples |
+            Select-Object Path, CookedValue |
+            ConvertTo-Csv -NoTypeInformation | Out-File perf_counters.csv -Encoding utf8
+
+      - name: Exporter les 200 derniers évènements System et Application
+        shell: pwsh
+        run: |
+          Get-EventLog -LogName System -Newest 200 | Export-Csv eventlog_system.csv -NoTypeInformation -Encoding utf8
+          Get-EventLog -LogName Application -Newest 200 | Export-Csv eventlog_application.csv -NoTypeInformation -Encoding utf8
+
+      - name: Lister services en échec
+        shell: pwsh
+        run: |
+          Get-Service | Where-Object {$_.Status -ne 'Running'} |
+            Select-Object Name,Status,DisplayName |
+            ConvertTo-Csv -NoTypeInformation | Out-File services_not_running.csv -Encoding utf8
+
+      - name: Capturer espace disque
+        shell: pwsh
+        run: |
+          Get-PSDrive -PSProvider FileSystem | Select-Object Name,Used,Free, @{N='Free(GB)';E={[math]::Round($_.Free/1GB,2)}}, @{N='Used(GB)';E={[math]::Round($_.Used/1GB,2)}} |
+            ConvertTo-Csv -NoTypeInformation | Out-File disk_usage.csv -Encoding utf8
+
+      - name: Télécharger les fichiers de diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-windows
+          path: |
+            processes_top_cpu.csv
+            perf_counters.csv
+            eventlog_system.csv
+            eventlog_application.csv
+            services_not_running.csv
+            disk_usage.csv
